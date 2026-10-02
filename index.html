@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Pluck — save videos from X</title>
+<title>Pluck — save videos from X, YouTube and more</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪝</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -139,12 +139,13 @@
     overflow: hidden;
     border: 1px solid var(--line);
   }
-  .clip video {
+  .clip video, .clip .still {
     display: block;
     width: 100%;
     max-height: 60vh;
     background: #000;
   }
+  .clip .still { object-fit: contain; aspect-ratio: 16 / 9; }
   .clip-body { padding: 16px; }
   .clip-title { font-weight: 700; margin: 0 0 12px; }
   .variants { list-style: none; margin: 0; padding: 0; }
@@ -192,12 +193,12 @@
 <body>
 <main>
   <h1>Pluck</h1>
-  <p class="lede">Paste a link to a post on X. Get the video file. No pop-ups, no fake download buttons.</p>
+  <p class="lede">Paste a link to a post on X, a YouTube video, or any page with a video. Get the file. No pop-ups, no fake download buttons.</p>
 
   <form id="form" autocomplete="off">
     <div class="field">
-      <label for="url" style="position:absolute;left:-9999px">Post link</label>
-      <input id="url" type="url" inputmode="url" placeholder="https://x.com/…/status/…" required>
+      <label for="url" style="position:absolute;left:-9999px">Video link</label>
+      <input id="url" type="url" inputmode="url" placeholder="https://youtube.com/watch?v=… or x.com/…/status/…" required>
       <button type="button" class="paste" id="paste">Paste</button>
     </div>
     <button class="go" id="go" type="submit">Find video</button>
@@ -206,7 +207,7 @@
   <div class="msg" id="msg" role="status" hidden></div>
   <section id="results" aria-live="polite"></section>
 
-  <footer>Works with public posts. Sensitive or protected posts can’t be fetched.</footer>
+  <footer>Works with public videos. Private, protected or age-restricted ones can’t be fetched, and live streams can’t be saved.</footer>
 </main>
 
 <script>
@@ -227,12 +228,9 @@
     if (!b) return '';
     return b >= 1e6 ? (b / 1e6).toFixed(1) + ' Mbps' : Math.round(b / 1e3) + ' kbps';
   }
-  function qualityName(v, i, total) {
-    if (v.height && v.width) {
-      const short = Math.min(v.width, v.height);
-      return short + 'p';
-    }
-    return i === 0 ? 'Best' : (i === total - 1 ? 'Smallest' : 'Medium');
+  function variantName(v, i) {
+    if (v.label) return v.label;
+    return i === 0 ? 'Best' : 'Alternative';
   }
   function el(tag, attrs = {}, ...kids) {
     const n = document.createElement(tag);
@@ -242,18 +240,21 @@
     for (const k of kids) n.append(k);
     return n;
   }
+  // The worker returns either a full URL or a path on itself (e.g. /dl?…)
+  function absolute(href) { return href.startsWith('/') ? WORKER + href : href; }
 
   function render(data) {
     results.innerHTML = '';
     const head = el('div', {},
-      el('p', { class: 'post-meta' }, `${data.name ? data.name + ' ' : ''}@${data.user}`),
-      el('p', { class: 'post-text' }, data.text.replace(/https:\/\/t\.co\/\S+$/, '').trim())
+      el('p', { class: 'post-meta' }, [data.source, data.title].filter(Boolean).join(' · ')),
+      el('p', { class: 'post-text' }, data.text || '')
     );
     results.append(head);
 
     data.videos.forEach((vid, n) => {
-      const best = vid.variants[0];
-      const video = el('video', { controls: '', playsinline: '', preload: 'metadata', poster: vid.thumb, src: best.url });
+      const media = vid.preview
+        ? el('video', { controls: '', playsinline: '', preload: 'metadata', src: vid.preview, ...(vid.thumb ? { poster: vid.thumb } : {}) })
+        : (vid.thumb ? el('img', { class: 'still', src: vid.thumb, alt: '' }) : '');
       const label = vid.type === 'gif' ? 'GIF (saved as MP4)' : 'Video';
       const title = [
         data.videos.length > 1 ? `${label} ${n + 1} of ${data.videos.length}` : label,
@@ -263,22 +264,20 @@
 
       const list = el('ul', { class: 'variants' });
       vid.variants.forEach((v, i) => {
-        const q = qualityName(v, i, vid.variants.length);
-        const file = `${data.user}_${data.id}${data.videos.length > 1 ? '_' + (n + 1) : ''}_${q}`;
-        const dlHref = `${WORKER}/dl?u=${encodeURIComponent(v.url)}&name=${encodeURIComponent(file)}`;
         const dims = v.width ? `${v.width}×${v.height}` : '';
+        const details = [dims, fmtBitrate(v.bitrate), (v.ext || '').toUpperCase()].filter(Boolean).join(', ');
         list.append(el('li', {},
           el('div', { class: 'q' },
-            el('strong', {}, q + (i === 0 ? ' — best quality' : '')),
-            el('span', {}, [dims, fmtBitrate(v.bitrate)].filter(Boolean).join(', '))
+            el('strong', {}, variantName(v, i) + (i === 0 && vid.variants.length > 1 ? ' — best quality' : '')),
+            el('span', {}, details)
           ),
           el('a', { class: 'alt', href: v.url, target: '_blank', rel: 'noopener' }, 'Open'),
-          el('a', { class: 'dl', href: dlHref }, 'Download')
+          el('a', { class: 'dl', href: absolute(v.dl || v.url) }, 'Download')
         ));
       });
 
       results.append(el('article', { class: 'clip' },
-        video,
+        media,
         el('div', { class: 'clip-body' }, el('p', { class: 'clip-title' }, title), list)
       ));
     });
