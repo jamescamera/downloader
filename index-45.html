@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pluck — save videos from X</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪝</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* ====== SET THIS to your Cloudflare Worker URL (no trailing slash) ====== */
+  /* (also set in the script below) */
+
+  :root {
+    --bg: #E4E8EC;
+    --paper: #FFFFFF;
+    --ink: #17202E;
+    --muted: #5B6676;
+    --line: #C5CCD5;
+    --cobalt: #2340C9;
+    --cobalt-ink: #FFFFFF;
+    --warn-bg: #FFF4D6;
+    --warn-ink: #5A4100;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141A23;
+      --paper: #1D2531;
+      --ink: #EEF1F5;
+      --muted: #9AA5B4;
+      --line: #344052;
+      --cobalt: #7D93FF;
+      --cobalt-ink: #0D1424;
+      --warn-bg: #3A3014;
+      --warn-ink: #FFE3A0;
+    }
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Familjen Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 17px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 9vh 20px 64px;
+  }
+  h1 {
+    font-size: clamp(64px, 18vw, 132px);
+    line-height: .85;
+    letter-spacing: -0.045em;
+    font-weight: 700;
+    margin: 0 0 18px;
+  }
+  .lede {
+    color: var(--muted);
+    margin: 0 0 36px;
+    max-width: 34ch;
+  }
+
+  form { display: grid; gap: 10px; }
+  .field {
+    display: flex;
+    align-items: stretch;
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .field:focus-within { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+  input[type=url] {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 18px;
+    padding: 18px 16px;
+    outline: none;
+  }
+  input::placeholder { color: var(--muted); }
+  .paste {
+    border: 0;
+    border-left: 2px solid var(--line);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-weight: 500;
+    padding: 0 16px;
+    cursor: pointer;
+  }
+  .paste:focus-visible { outline: 3px solid var(--cobalt); outline-offset: -3px; }
+  .go {
+    border: 0;
+    border-radius: 14px;
+    background: var(--cobalt);
+    color: var(--cobalt-ink);
+    font: inherit;
+    font-weight: 700;
+    font-size: 18px;
+    padding: 17px;
+    cursor: pointer;
+  }
+  .go:disabled { opacity: .55; cursor: progress; }
+  .go:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+  .msg {
+    margin-top: 20px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--warn-bg);
+    color: var(--warn-ink);
+  }
+  .msg[hidden] { display: none; }
+
+  #results { margin-top: 32px; display: grid; gap: 28px; }
+  .post-meta { color: var(--muted); font-size: 15px; margin: 0 0 4px; }
+  .post-text {
+    margin: 0;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .clip {
+    background: var(--paper);
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .clip video {
+    display: block;
+    width: 100%;
+    max-height: 60vh;
+    background: #000;
+  }
+  .clip-body { padding: 16px; }
+  .clip-title { font-weight: 700; margin: 0 0 12px; }
+  .variants { list-style: none; margin: 0; padding: 0; }
+  .variants li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-top: 1px solid var(--line);
+  }
+  .variants li:first-child { border-top: 0; padding-top: 0; }
+  .q { flex: 1; }
+  .q strong { display: block; }
+  .q span { color: var(--muted); font-size: 14px; }
+  .dl {
+    text-decoration: none;
+    font-weight: 700;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: 2px solid var(--ink);
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .variants li:first-child .dl { background: var(--ink); color: var(--paper); }
+  .dl:focus-visible { outline: 3px solid var(--cobalt); outline-offset: 2px; }
+  .alt {
+    color: var(--muted);
+    font-size: 14px;
+    text-decoration: underline;
+    white-space: nowrap;
+  }
+
+  footer { margin-top: 56px; color: var(--muted); font-size: 14px; }
+
+  @media (max-width: 420px) {
+    .variants li { flex-wrap: wrap; }
+    .q { flex-basis: 100%; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    #results > * { animation: drop .35s ease-out both; }
+    @keyframes drop { from { opacity: 0; transform: translateY(-6px); } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pluck</h1>
+  <p class="lede">Paste a link to a post on X. Get the video file. No pop-ups, no fake download buttons.</p>
+
+  <form id="form" autocomplete="off">
+    <div class="field">
+      <label for="url" style="position:absolute;left:-9999px">Post link</label>
+      <input id="url" type="url" inputmode="url" placeholder="https://x.com/…/status/…" required>
+      <button type="button" class="paste" id="paste">Paste</button>
+    </div>
+    <button class="go" id="go" type="submit">Find video</button>
+  </form>
+
+  <div class="msg" id="msg" role="status" hidden></div>
+  <section id="results" aria-live="polite"></section>
+
+  <footer>Works with public posts. Sensitive or protected posts can’t be fetched.</footer>
+</main>
+
+<script>
+  // ====== SET THIS to your Cloudflare Worker URL (no trailing slash) ======
+  const WORKER = 'https://pluck.YOUR-SUBDOMAIN.workers.dev';
+
+  const $ = id => document.getElementById(id);
+  const form = $('form'), input = $('url'), go = $('go'), msg = $('msg'), results = $('results');
+
+  function showMsg(text) { msg.textContent = text; msg.hidden = !text; }
+
+  function fmtDuration(ms) {
+    if (!ms) return '';
+    const s = Math.round(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+  function fmtBitrate(b) {
+    if (!b) return '';
+    return b >= 1e6 ? (b / 1e6).toFixed(1) + ' Mbps' : Math.round(b / 1e3) + ' kbps';
+  }
+  function qualityName(v, i, total) {
+    if (v.height && v.width) {
+      const short = Math.min(v.width, v.height);
+      return short + 'p';
+    }
+    return i === 0 ? 'Best' : (i === total - 1 ? 'Smallest' : 'Medium');
+  }
+  function el(tag, attrs = {}, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'class') n.className = v; else n.setAttribute(k, v);
+    }
+    for (const k of kids) n.append(k);
+    return n;
+  }
+
+  function render(data) {
+    results.innerHTML = '';
+    const head = el('div', {},
+      el('p', { class: 'post-meta' }, `${data.name ? data.name + ' ' : ''}@${data.user}`),
+      el('p', { class: 'post-text' }, data.text.replace(/https:\/\/t\.co\/\S+$/, '').trim())
+    );
+    results.append(head);
+
+    data.videos.forEach((vid, n) => {
+      const best = vid.variants[0];
+      const video = el('video', { controls: '', playsinline: '', preload: 'metadata', poster: vid.thumb, src: best.url });
+      const label = vid.type === 'gif' ? 'GIF (saved as MP4)' : 'Video';
+      const title = [
+        data.videos.length > 1 ? `${label} ${n + 1} of ${data.videos.length}` : label,
+        vid.fromQuote ? '(from quoted post)' : '',
+        fmtDuration(vid.durationMs)
+      ].filter(Boolean).join(' ');
+
+      const list = el('ul', { class: 'variants' });
+      vid.variants.forEach((v, i) => {
+        const q = qualityName(v, i, vid.variants.length);
+        const file = `${data.user}_${data.id}${data.videos.length > 1 ? '_' + (n + 1) : ''}_${q}`;
+        const dlHref = `${WORKER}/dl?u=${encodeURIComponent(v.url)}&name=${encodeURIComponent(file)}`;
+        const dims = v.width ? `${v.width}×${v.height}` : '';
+        list.append(el('li', {},
+          el('div', { class: 'q' },
+            el('strong', {}, q + (i === 0 ? ' — best quality' : '')),
+            el('span', {}, [dims, fmtBitrate(v.bitrate)].filter(Boolean).join(', '))
+          ),
+          el('a', { class: 'alt', href: v.url, target: '_blank', rel: 'noopener' }, 'Open'),
+          el('a', { class: 'dl', href: dlHref }, 'Download')
+        ));
+      });
+
+      results.append(el('article', { class: 'clip' },
+        video,
+        el('div', { class: 'clip-body' }, el('p', { class: 'clip-title' }, title), list)
+      ));
+    });
+  }
+
+  async function lookup(link) {
+    showMsg('');
+    results.innerHTML = '';
+    go.disabled = true;
+    go.textContent = 'Finding…';
+    try {
+      const r = await fetch(`${WORKER}/info?url=${encodeURIComponent(link)}`);
+      const data = await r.json().catch(() => ({ error: 'The server sent back something unreadable.' }));
+      if (!r.ok || data.error) throw new Error(data.error || `Request failed (${r.status}).`);
+      render(data);
+      history.replaceState(null, '', '?url=' + encodeURIComponent(link));
+    } catch (e) {
+      if (WORKER.includes('YOUR-SUBDOMAIN')) {
+        showMsg('Set the WORKER address at the top of the script in index.html first.');
+      } else {
+        showMsg(e.message === 'Failed to fetch' ? 'Couldn’t reach the server. Check the WORKER address and your connection.' : e.message);
+      }
+    } finally {
+      go.disabled = false;
+      go.textContent = 'Find video';
+    }
+  }
+
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const link = input.value.trim();
+    if (link) lookup(link);
+  });
+
+  $('paste').addEventListener('click', async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) { input.value = t.trim(); lookup(input.value); }
+    } catch {
+      input.focus();
+      showMsg('Clipboard access was blocked. Long-press the box and choose Paste.');
+    }
+  });
+
+  // Support ?url=… so you can share straight into the page (e.g. from an iOS Shortcut)
+  const pre = new URLSearchParams(location.search).get('url');
+  if (pre) { input.value = pre; lookup(pre); }
+</script>
+</body>
+</html>
